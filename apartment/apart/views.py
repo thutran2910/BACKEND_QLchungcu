@@ -143,3 +143,74 @@ def payment_view(request: HttpRequest):
         return JsonResponse({"error": f"Failed to create payment request. Status code: {response.status_code}"},
                             status=500)
 >>>>>>> 863b52477a72dacf079b14944bc84898a6b5cedf
+
+
+
+
+class SurveyViewSet(viewsets.ModelViewSet):
+    queryset = Survey.objects.all()
+    serializer_class = SurveySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def list(self, request):
+        queryset = self.get_queryset()
+        serializer = self.serializer_class(queryset, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, pk=None):
+        survey = self.get_object()
+        serializer = self.serializer_class(survey)
+        return Response(serializer.data)
+
+
+
+class SurveyResultViewSet(viewsets.ModelViewSet):
+    queryset = SurveyResult.objects.all()
+    serializer_class = SurveyResultSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return SurveyResult.objects.all()
+        elif user.is_staff:
+            return SurveyResult.objects.filter(id=user.id)
+        return SurveyResult.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(resident=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def list(self, request):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+
+    def retrieve(self, request, pk=None):
+        survey_result = self.get_object()
+        serializer = self.get_serializer(survey_result)
+        return Response(serializer.data)
+
+    def update(self, request, pk=None):
+        survey_result = self.get_object()
+        if survey_result.resident != request.user:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(survey_result, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def destroy(self, request, pk=None):
+        survey_result = self.get_object()
+        if survey_result.resident != request.user:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        survey_result.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

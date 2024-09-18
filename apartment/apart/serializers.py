@@ -40,4 +40,12 @@ class BillSerializer(serializers.ModelSerializer):
 
 
 
+class SurveySerializer(ModelSerializer):
+    class Meta:
+        model = Survey
+        fields = '__all__'
 
+class SurveyResultSerializer(ModelSerializer):
+    class Meta:
+        model = SurveyResult
+        fields = '__all__'
