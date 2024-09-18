@@ -75,3 +75,68 @@ class BillViewSet(viewsets.ModelViewSet):
             return Response({"message": "Bill deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
         except Bill.DoesNotExist:
             return Response({"error": "Bill not found."}, status=status.HTTP_404_NOT_FOUND)
+
+class PaymentViewSet(viewsets.ModelViewSet):
+    serializer_class = BillSerializer
+    permission_classes = [IsAuthenticated]
+    def get_queryset(self):
+        resident = self.request.user
+        queryset = Bill.objects. filter(resident=resident, payment_status='UNPAID')
+        return queryset
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(payment_status='PAID')
+        return Response(serializer.data)
+
+@csrf_exempt
+def payment_view(request: HttpRequest):
+    partnerCode = "MOMO"
+    accessKey = "F8BBA842ECF85"
+    secretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz"
+    requestId = f"{partnerCode}{int(time.time() * 1000)}"
+    orderId = 'MM' + str(int(time.time() * 1000))
+    orderInfo = "pay with MoMo"
+    redirectUrl = "https://momo.vn/return"
+    ipnUrl = "https://callback.url/notify"
+    amount = request.headers.get('amount', '')
+    requestType = "payWithATM"
+    extraData = ""
+
+    # Construct raw signature
+    rawSignature = f"accessKey={accessKey}&amount={amount}&extraData={extraData}&ipnUrl={ipnUrl}&orderId={orderId}&orderInfo={orderInfo}&partnerCode={partnerCode}&redirectUrl={redirectUrl}&requestId={requestId}&requestType={requestType}"
+
+    # Generate signature using HMAC-SHA256
+    signature = hmac.new(secretKey.encode(), rawSignature.encode(), hashlib.sha256).hexdigest()
+
+    # Create request body as JSON
+    data = {
+        "partnerCode": partnerCode,
+        "accessKey": accessKey,
+        "requestId": requestId,
+        "amount": amount,
+        "orderId": orderId,
+        "orderInfo": orderInfo,
+        "redirectUrl": redirectUrl,
+        "ipnUrl": ipnUrl,
+        "extraData": extraData,
+        "requestType": requestType,
+        "signature": signature,
+        "lang": "vi"
+    }
+
+    # Send request to MoMo endpoint
+    url = 'https://test-payment.momo.vn/v2/gateway/api/create'
+    headers = {'Content-Type': 'application/json'}
+    response = requests.post(url, json=data, headers=headers)
+
+    # Process response
+    if response.status_code == 200:
+        response_data = response.json()
+        pay_url = response_data.get('payUrl')
+        return JsonResponse(response_data)
+    else:
+        return JsonResponse({"error": f"Failed to create payment request. Status code: {response.status_code}"},
+                            status=500)
