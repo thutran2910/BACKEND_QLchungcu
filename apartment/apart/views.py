@@ -36,8 +36,6 @@ class BillViewSet(viewsets.ModelViewSet):
         if payment_status:
             queryset = queryset.filter(payment_status=payment_status.upper())
         return queryset
-<<<<<<< HEAD
-=======
 
     @action(methods=['get'], detail=False, url_path='total-bills')
     def total_bills(self, request, *args, **kwargs):
@@ -142,7 +140,6 @@ def payment_view(request: HttpRequest):
     else:
         return JsonResponse({"error": f"Failed to create payment request. Status code: {response.status_code}"},
                             status=500)
->>>>>>> 863b52477a72dacf079b14944bc84898a6b5cedf
 
 
 
@@ -214,3 +211,30 @@ class SurveyResultViewSet(viewsets.ModelViewSet):
             return Response(status=status.HTTP_403_FORBIDDEN)
         survey_result.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class StatisticalViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        return Response({"message": "Please provide a survey_id to get cleanliness statistics."}, status=400)
+
+    def retrieve(self, request, pk=None):
+        try:
+            queryset = SurveyResult.objects.filter(survey_id=pk)
+            if not queryset.exists():
+                return Response({"message": "Survey with the specified ID does not exist."}, status=404)
+
+            stats = queryset.aggregate(
+                maximum_cleanliness=Max('cleanliness_rating'),
+                maximum_facilities=Max('facilities_rating'),
+                maximum_services=Max('services_rating')
+            )
+
+            return Response({
+                'maximum_cleanliness': stats['maximum_cleanliness'],
+                'maximum_facilities': stats['maximum_facilities'],
+                'maximum_services': stats['maximum_services']
+            })
+        except Exception as e:
+            return Response({"message": str(e)}, status=500)
