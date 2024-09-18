@@ -19,6 +19,80 @@ from .serializers import ResidentSerializer, FlatSerializer, ItemSerializer, Fee
     CartProductSerializer, OrderSerializer
 
 
+class ResidentViewSet(viewsets.ModelViewSet):
+    queryset = Resident.objects.all()
+    serializer_class = ResidentSerializer
+
+    def get_permissions(self):
+        if self.action in ['get_current_user', 'lock_account', 'check_account_status', 'change_password','delete_resident']:
+            return [permissions.IsAuthenticated()]
+        elif self.action == 'create_new_account':
+            return [permissions.IsAuthenticated(), permissions.IsAdminUser()]
+        return [permissions.AllowAny()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Resident.objects.all()
+        elif user.is_staff:
+            return Resident.objects.filter(id=user.id)
+        return Resident.objects.none()
+
+    @action(methods=['get', 'patch'], url_path='current-user', detail=False)
+    def get_current_user(self, request):
+        user = request.user
+        if request.method == 'PATCH':
+            for k, v in request.data.items():
+                setattr(user, k, v)
+            user.save()
+        return Response(ResidentSerializer(user, context={'request': request}).data)
+
+    @action(methods=['post'], detail=True, url_path='lock-account')
+    def lock_account(self, request, pk=None):
+        user = self.get_object()
+        user.is_active = False
+        user.save()
+        return Response({'status': 'account locked'}, status=status.HTTP_200_OK)
+
+    @action(methods=['get'], detail=True, url_path='check-account-status')
+    def check_account_status(self, request, pk=None):
+        user = self.get_object()
+        return Response({'is_active': user.is_active}, status=status.HTTP_200_OK)
+
+    @action(methods=['post'], detail=False, url_path='change-password')
+    def change_password(self, request):
+        user = request.user
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+
+        if not user.check_password(old_password):
+            return Response({'error': 'Mật khẩu cũ không chính xác.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+
+        return Response({'message': 'Đã thay đổi mật khẩu thành công.'}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['patch'], url_path='change-avatar', parser_classes=[MultiPartParser, FormParser])
+    def change_avatar(self, request):
+        user = request.user
+        if 'avatar' not in request.data:
+            return Response({"error": "Avatar is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        avatar = request.data['avatar']
+        user.avatar = avatar
+        user.save()
+
+        return Response({"message": "Avatar updated successfully"}, status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
 
 class BillViewSet(viewsets.ModelViewSet):
     serializer_class = BillSerializer
