@@ -38,6 +38,16 @@ class ResidentViewSet(viewsets.ModelViewSet):
             return Resident.objects.filter(id=user.id)
         return Resident.objects.none()
 
+    @action(detail=False, methods=['get'], url_path='resident-statistics')
+    def resident_statistics(self, request):
+        staff_count = Resident.objects.filter(is_superuser=False).count()  # Assuming is_staff indicates staff
+        admin_count = Resident.objects.filter(is_superuser=True).count()  # Assuming is_superuser indicates admin
+
+        return Response({
+            'staff_count': staff_count,
+            'admin_count': admin_count,
+        })
+
     @action(methods=['get', 'patch'], url_path='current-user', detail=False)
     def get_current_user(self, request):
         user = request.user
@@ -149,6 +159,22 @@ class BillViewSet(viewsets.ModelViewSet):
             return Response({"message": "Bill deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
         except Bill.DoesNotExist:
             return Response({"error": "Bill not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(methods=['get'], detail=False, url_path='bill-statistics', permission_classes=[permissions.IsAuthenticated])
+    def bill_statistics(self, request, *args, **kwargs):
+        resident = self.request.user
+        if resident.is_superuser:
+            bills = Bill.objects.all()
+        else:
+            bills = Bill.objects.filter(resident=resident)
+
+        paid_bills = bills.filter(payment_status='PAID').count()
+        unpaid_bills = bills.filter(payment_status='UNPAID').count()
+
+        return Response({
+            'paid_bills': paid_bills,
+            'unpaid_bills': unpaid_bills
+        })
 
 class PaymentViewSet(viewsets.ModelViewSet):
     serializer_class = BillSerializer
@@ -400,6 +426,13 @@ class CartViewSet(viewsets.ModelViewSet):
             'total_price': total_price
         }, status=status.HTTP_200_OK)
 
+class FlatViewSet(viewsets.ModelViewSet):
+    queryset = Flat.objects.all()
+    serializer_class = FlatSerializer
+    @action(detail=False, methods=['get'], url_path='flat-count', permission_classes=[permissions.IsAuthenticated])
+    def flat_count(self, request):
+        flat_count = Flat.objects.all().count()  # Assuming is_staff indicates staff
+        return Response({'flat_count': flat_count})
 
 
 class OrderViewSet(viewsets.ModelViewSet):
