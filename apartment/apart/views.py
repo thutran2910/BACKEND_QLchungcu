@@ -403,7 +403,7 @@ class CartViewSet(viewsets.ModelViewSet):
 
 
 class OrderViewSet(viewsets.ModelViewSet):
-    # queryset = Order.objects.all()
+    queryset = Order.objects.all()
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
 
@@ -453,3 +453,55 @@ class ItemViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class FaMemberViewSet(viewsets.ModelViewSet):
+    queryset = FaMember.objects.all()
+    serializer_class = FaMemberSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = paginators.Paginator
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return FaMember.objects.all()
+        elif user.is_staff:
+            return FaMember.objects.filter(id=user.id)
+        return FaMember.objects.none()
+
+class FeedbackViewSet(viewsets.ModelViewSet):
+    queryset = Feedback.objects.all()
+    serializer_class = FeedbackSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = paginators.Paginator
+
+    def get_queryset(self):
+        resident = self.request.user
+        queryset = Feedback.objects.all() if resident.is_superuser else Feedback.objects.filter(resident=resident)
+
+        resolved_status = self.request.query_params.get('resolved', None)
+        if resolved_status is not None:
+            queryset = queryset.filter(resolved=(resolved_status.lower() == 'true'))
+
+        return queryset
+
+    @action(detail=True, methods=['patch'])  # Change 'put' to 'patch'
+    def mark_as_resolved(self, request, pk=None):
+        if not request.user.is_superuser:
+            return Response({"detail": "Only superusers can mark feedback as resolved."},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        feedback = self.get_object()
+        serializer = self.get_serializer(instance=feedback, data={'resolved': True}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def get_object(self):
+        try:
+            feedback = super().get_object()
+            if self.request.user.is_superuser or feedback.resident == self.request.user:
+                return feedback
+            raise Http404("Feedback not found or you don't have permission to access it.")
+        except Feedback.DoesNotExist:
+            raise Http404("Feedback not found.")
+

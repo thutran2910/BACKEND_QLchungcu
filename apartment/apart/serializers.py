@@ -145,3 +145,18 @@ class ItemSerializer(ModelSerializer):
     class Meta:
         model = Item
         fields = '__all__'
+
+class FaMemberSerializer(ModelSerializer):
+    first_name = serializers.CharField(source='resident.first_name', read_only=True)
+    last_name = serializers.CharField(source='resident.last_name', read_only=True)
+    class Meta:
+        model = FaMember
+        fields = '__all__'
+
+class FeedbackSerializer(ModelSerializer):
+    first_name = serializers.CharField(source='resident.first_name')
+    last_name = serializers.CharField(source='resident.last_name')
+
+    class Meta:
+        model = Feedback
+        fields = '__all__'
