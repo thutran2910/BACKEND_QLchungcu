@@ -90,3 +90,58 @@ class SurveyResultSerializer(ModelSerializer):
     class Meta:
         model = SurveyResult
         fields = '__all__'
+
+class ProductSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    image = serializers.ImageField(write_only=True, required=False)
+    def get_image_url(self, instance):
+        if instance.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(instance.image.url)
+            return instance.image.url
+        return None
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['image_url'] = self.get_image_url(instance)
+        return rep
+    class Meta:
+        model = Product
+        fields = '__all__'
+
+class CartProductSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), write_only=True, source='product')
+    #quantity = serializers.IntegerField()
+    class Meta:
+        model = CartProduct
+        fields = ['id', 'product', 'product_id', 'quantity']
+
+class CartSerializer(serializers.ModelSerializer):
+    items = CartProductSerializer(many=True, source='cartproduct_set', read_only=True)
+    class Meta:
+        model = Cart
+        fields = ['id', 'resident', 'items']
+
+class OrderProductSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), write_only=True, source='product')
+
+    class Meta:
+        model = OrderProduct
+        fields = ['id', 'product', 'product_id', 'quantity', 'price']
+
+
+class FlatSerializer(ModelSerializer):
+    class Meta:
+        model = Flat
+        fields = ["id", "number", "floor"]
+
+class ItemSerializer(ModelSerializer):
+    first_name = serializers.CharField(source='resident.first_name')
+    last_name = serializers.CharField(source='resident.last_name')
+
+    class Meta:
+        model = Item
+        fields = '__all__'

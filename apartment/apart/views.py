@@ -312,3 +312,144 @@ class StatisticalViewSet(viewsets.ViewSet):
             })
         except Exception as e:
             return Response({"message": str(e)}, status=500)
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    pagination_class = paginators.Paginator
+
+class CartViewSet(viewsets.ModelViewSet):
+    serializer_class = CartSerializer
+    pagination_class = paginators.Paginator
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Cart.objects.filter(resident=self.request.user)
+
+    @action(methods=['post'], detail=False, url_path='add-product')
+    def add_product(self, request):
+        user = request.user
+        product_id = request.data.get('product_id')
+        quantity = int(request.data.get('quantity', 1))
+
+        try:
+            product = get_object_or_404(Product, id=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        cart, created = Cart.objects.get_or_create(resident=user)
+        cart_product, cart_product_created = CartProduct.objects.get_or_create(cart=cart, product=product)
+
+        if not cart_product_created:
+            cart_product.quantity += quantity
+        else:
+            cart_product.quantity = quantity
+
+        cart_product.save()
+        cart.refresh_from_db()
+        serialized_cart = CartSerializer(cart)
+
+        return Response({'status': 'Product added to cart', 'cart': serialized_cart.data}, status=status.HTTP_200_OK)
+
+    @action(methods=['get'], detail=False, url_path='cart-summary')
+    def cart_summary(self, request):
+        user = request.user
+        try:
+            cart = Cart.objects.get(resident=user)
+        except Cart.DoesNotExist:
+            return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        cart_products = CartProduct.objects.filter(cart=cart)
+        serialized_cart_products = CartProductSerializer(cart_products, many=True)
+
+        total_price = sum(item.product.price * item.quantity for item in cart_products)
+
+        return Response({'cart_products': serialized_cart_products.data, 'total_price': total_price}, status=status.HTTP_200_OK)
+
+@action(methods=['post'], detail=False, url_path='update-product-quantity')
+    def update_product_quantity(self, request):
+        user = request.user
+        product_id = request.data.get('product_id')
+        quantity = int(request.data.get('quantity', 1))
+
+        try:
+            product = get_object_or_404(Product, id=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            cart = Cart.objects.get(resident=user)
+            cart_product = CartProduct.objects.get(cart=cart, product=product)
+        except (Cart.DoesNotExist, CartProduct.DoesNotExist):
+            return Response({'error': 'Cart or CartProduct not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if quantity <= 0:
+            cart_product.delete()
+        else:
+            cart_product.quantity = quantity
+            cart_product.save()
+
+        total_price = sum(item.product.price * item.quantity for item in CartProduct.objects.filter(cart=cart))
+
+        serialized_cart = CartSerializer(cart)
+
+        return Response({
+            'status': 'Product quantity updated',
+            'cart': serialized_cart.data,
+            'total_price': total_price
+        }, status=status.HTTP_200_OK)
+
+
+
+class OrderViewSet(viewsets.ModelViewSet):
+    # queryset = Order.objects.all()
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=True, methods=['post'], url_path='confirm-order')
+        def confirm_order(self, request, pk=None):
+            user = request.user
+            try:
+                order = Order.objects.get(id=pk, resident=user, status='ĐANG CHỜ')
+                order.status = 'ĐANG GIAO'
+                order.save()
+                serializer = self.get_serializer(order)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            except Order.DoesNotExist:
+                return Response({'error': 'Order does not exist or you do not have permission to confirm it.'},
+                                status=status.HTTP_404_NOT_FOUND)
+
+
+class ItemViewSet(viewsets.ModelViewSet):
+    queryset = Item.objects.all()
+    serializer_class = ItemSerializer
+    pagination_class = paginators.Paginator
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            queryset = Item.objects.all()
+        else:
+            queryset = Item.objects.filter(resident=user)
+
+        status_filter = self.request.query_params.get('status', None)
+        if status_filter:
+            queryset = queryset.filter(status=status_filter.upper())
+
+        return queryset
+
+    @action(detail=True, methods=['patch'])
+    def mark_received(self, request, pk=None):
+        user = request.user
+        item = self.get_object()
+
+        if not (user.is_superuser and user.is_staff):
+            return Response({"detail": "Only superusers or staff members can mark items as received."},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        serializer = self.get_serializer(instance=item, data={'status': 'RECEIVED'}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
