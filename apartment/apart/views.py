@@ -38,15 +38,10 @@ class ResidentViewSet(viewsets.ModelViewSet):
             return Resident.objects.filter(id=user.id)
         return Resident.objects.none()
 
-    @action(detail=False, methods=['get'], url_path='resident-statistics')
-    def resident_statistics(self, request):
-        staff_count = Resident.objects.filter(is_superuser=False).count()  # Assuming is_staff indicates staff
-        admin_count = Resident.objects.filter(is_superuser=True).count()  # Assuming is_superuser indicates admin
-
-        return Response({
-            'staff_count': staff_count,
-            'admin_count': admin_count,
-        })
+    @action(detail=False, methods=['get'], url_path='staff-count', permission_classes=[permissions.IsAuthenticated])
+    def staff_count(self, request):
+        staff_count = Resident.objects.filter(is_staff=True).count()  # Assuming is_staff indicates staff
+        return Response({'staff_count': staff_count})
 
     @action(methods=['get', 'patch'], url_path='current-user', detail=False)
     def get_current_user(self, request):
@@ -68,6 +63,17 @@ class ResidentViewSet(viewsets.ModelViewSet):
     def check_account_status(self, request, pk=None):
         user = self.get_object()
         return Response({'is_active': user.is_active}, status=status.HTTP_200_OK)
+
+    @action(methods=['post'], url_path='create-new-account', detail=False)
+    def create_new_account(self, request):
+        if not request.user.is_superuser:
+            return Response({'error': 'Bạn không có quyền thực hiện hành động này.'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @action(methods=['post'], detail=False, url_path='change-password')
     def change_password(self, request):
@@ -94,13 +100,22 @@ class ResidentViewSet(viewsets.ModelViewSet):
         user.save()
 
         return Response({"message": "Avatar updated successfully"}, status=status.HTTP_200_OK)
-
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+    @action(detail=True, methods=['delete'], url_path='delete-resident')
+    def delete_resident(self, request, pk=None):
+        try:
+            resident = self.get_object()
+            resident.delete()
+            return Response({"message": "Resident deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
+        except Resident.DoesNotExist:
+            return Response({"error": "Resident not found."}, status=status.HTTP_404_NOT_FOUND)
+
 
 
 
