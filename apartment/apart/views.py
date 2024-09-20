@@ -264,17 +264,10 @@ class SurveyViewSet(viewsets.ModelViewSet):
     serializer_class = SurveySerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
 
     def list(self, request):
         queryset = self.get_queryset()
         serializer = self.serializer_class(queryset, many=True)
-        return Response(serializer.data)
-
-    def retrieve(self, request, pk=None):
-        survey = self.get_object()
-        serializer = self.serializer_class(survey)
         return Response(serializer.data)
 
 
@@ -302,30 +295,6 @@ class SurveyResultViewSet(viewsets.ModelViewSet):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
-
-
-
-    def retrieve(self, request, pk=None):
-        survey_result = self.get_object()
-        serializer = self.get_serializer(survey_result)
-        return Response(serializer.data)
-
-    def update(self, request, pk=None):
-        survey_result = self.get_object()
-        if survey_result.resident != request.user:
-            return Response(status=status.HTTP_403_FORBIDDEN)
-        serializer = self.get_serializer(survey_result, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def destroy(self, request, pk=None):
-        survey_result = self.get_object()
-        if survey_result.resident != request.user:
-            return Response(status=status.HTTP_403_FORBIDDEN)
-        survey_result.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class StatisticalViewSet(viewsets.ViewSet):
