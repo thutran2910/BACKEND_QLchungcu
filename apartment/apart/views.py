@@ -30,6 +30,16 @@ class ResidentViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), permissions.IsAdminUser()]
         return [permissions.AllowAny()]
 
+    @action(detail=False, methods=['get'], url_path='resident-statistics')
+    def resident_statistics(self, request):
+        staff_count = Resident.objects.filter(is_superuser=False).count()  # Assuming is_staff indicates staff
+        admin_count = Resident.objects.filter(is_superuser=True).count()  # Assuming is_superuser indicates admin
+
+        return Response({
+            'staff_count': staff_count,
+            'admin_count': admin_count,
+        })
+
     def get_queryset(self):
         user = self.request.user
         if user.is_superuser:
@@ -116,7 +126,146 @@ class ResidentViewSet(viewsets.ModelViewSet):
         except Resident.DoesNotExist:
             return Response({"error": "Resident not found."}, status=status.HTTP_404_NOT_FOUND)
 
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    pagination_class = paginators.Paginator
 
+class CartViewSet(viewsets.ModelViewSet):
+    serializer_class = CartSerializer
+    pagination_class = paginators.Paginator
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Cart.objects.filter(resident=self.request.user)
+
+    @action(methods=['post'], detail=False, url_path='add-product')
+    def add_product(self, request):
+        user = request.user
+        product_id = request.data.get('product_id')
+        quantity = int(request.data.get('quantity', 1))
+
+        try:
+            product = get_object_or_404(Product, id=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        cart, created = Cart.objects.get_or_create(resident=user)
+        cart_product, cart_product_created = CartProduct.objects.get_or_create(cart=cart, product=product)
+
+        if not cart_product_created:
+            cart_product.quantity += quantity
+        else:
+            cart_product.quantity = quantity
+
+        cart_product.save()
+        cart.refresh_from_db()
+        serialized_cart = CartSerializer(cart)
+
+        return Response({'status': 'Product added to cart', 'cart': serialized_cart.data}, status=status.HTTP_200_OK)
+
+    @action(methods=['get'], detail=False, url_path='cart-summary')
+    def cart_summary(self, request):
+        user = request.user
+        try:
+            cart = Cart.objects.get(resident=user)
+        except Cart.DoesNotExist:
+            return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        cart_products = CartProduct.objects.filter(cart=cart)
+        serialized_cart_products = CartProductSerializer(cart_products, many=True)
+
+        total_price = sum(item.product.price * item.quantity for item in cart_products)
+
+        return Response({'cart_products': serialized_cart_products.data, 'total_price': total_price}, status=status.HTTP_200_OK)
+
+    @action(methods=['delete'], detail=True, url_path='delete-product')
+    def delete_product(self, request, pk=None):
+        user = request.user
+
+        try:
+            cart_product = CartProduct.objects.get(cart__resident=user, id=pk)
+            cart_product.delete()
+            return Response({'status': 'Product removed from cart'}, status=status.HTTP_204_NO_CONTENT)
+        except CartProduct.DoesNotExist:
+            return Response({'error': 'Product not found in cart'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(methods=['post'], detail=False, url_path='update-product-quantity')
+    def update_product_quantity(self, request):
+        user = request.user
+        product_id = request.data.get('product_id')
+        quantity = int(request.data.get('quantity', 1))
+
+        try:
+            product = get_object_or_404(Product, id=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            cart = Cart.objects.get(resident=user)
+            cart_product = CartProduct.objects.get(cart=cart, product=product)
+        except (Cart.DoesNotExist, CartProduct.DoesNotExist):
+            return Response({'error': 'Cart or CartProduct not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if quantity <= 0:
+            cart_product.delete()
+        else:
+            cart_product.quantity = quantity
+            cart_product.save()
+
+        total_price = sum(item.product.price * item.quantity for item in CartProduct.objects.filter(cart=cart))
+
+        serialized_cart = CartSerializer(cart)
+
+        return Response({
+            'status': 'Product quantity updated',
+            'cart': serialized_cart.data,
+            'total_price': total_price
+        }, status=status.HTTP_200_OK)
+
+class OrderViewSet(viewsets.ModelViewSet):
+    queryset = Order.objects.all()
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['post'], url_path='create-order-from-cart')
+    def create_order_from_cart(self, request):
+        user = request.user
+        try:
+            cart = Cart.objects.get(resident=user)
+        except Cart.DoesNotExist:
+            return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        order = Order.objects.create(resident=user, total_amount=0)
+        cart_products = CartProduct.objects.filter(cart=cart)
+        total_amount = 0
+
+        for item in cart_products:
+            OrderProduct.objects.create(order=order, product=item.product, quantity=item.quantity,
+                                        price=item.product.price)
+            total_amount += item.product.price * item.quantity
+
+        order.total_amount = total_amount
+        order.save()
+        serialized_order = OrderSerializer(order)
+
+        # Clear the cart after creating the order
+        cart_products.delete()
+
+        return Response(serialized_order.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='confirm-order')
+    def confirm_order(self, request, pk=None):
+        user = request.user
+        try:
+            order = Order.objects.get(id=pk, resident=user, status='ĐANG CHỜ')
+            order.status = 'ĐANG GIAO'
+            order.save()
+            serializer = self.get_serializer(order)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Order.DoesNotExist:
+            return Response({'error': 'Order does not exist or you do not have permission to confirm it.'},
+                            status=status.HTTP_404_NOT_FOUND)
 
 
 class BillViewSet(viewsets.ModelViewSet):
@@ -190,7 +339,6 @@ class BillViewSet(viewsets.ModelViewSet):
             'paid_bills': paid_bills,
             'unpaid_bills': unpaid_bills
         })
-
 class PaymentViewSet(viewsets.ModelViewSet):
     serializer_class = BillSerializer
     permission_classes = [IsAuthenticated]
@@ -256,160 +404,6 @@ def payment_view(request: HttpRequest):
         return JsonResponse({"error": f"Failed to create payment request. Status code: {response.status_code}"},
                             status=500)
 
-
-
-
-class SurveyViewSet(viewsets.ModelViewSet):
-    queryset = Survey.objects.all()
-    serializer_class = SurveySerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-
-    def list(self, request):
-        queryset = self.get_queryset()
-        serializer = self.serializer_class(queryset, many=True)
-        return Response(serializer.data)
-
-
-
-class SurveyResultViewSet(viewsets.ModelViewSet):
-    queryset = SurveyResult.objects.all()
-    serializer_class = SurveyResultSerializer
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_superuser:
-            return SurveyResult.objects.all()
-        elif user.is_staff:
-            return SurveyResult.objects.filter(id=user.id)
-        return SurveyResult.objects.none()
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(resident=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def list(self, request):
-        queryset = self.get_queryset()
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-
-
-class StatisticalViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
-
-    def list(self, request):
-        return Response({"message": "Please provide a survey_id to get cleanliness statistics."}, status=400)
-
-    def retrieve(self, request, pk=None):
-        try:
-            queryset = SurveyResult.objects.filter(survey_id=pk)
-            if not queryset.exists():
-                return Response({"message": "Survey with the specified ID does not exist."}, status=404)
-
-            stats = queryset.aggregate(
-                maximum_cleanliness=Max('cleanliness_rating'),
-                maximum_facilities=Max('facilities_rating'),
-                maximum_services=Max('services_rating')
-            )
-
-            return Response({
-                'maximum_cleanliness': stats['maximum_cleanliness'],
-                'maximum_facilities': stats['maximum_facilities'],
-                'maximum_services': stats['maximum_services']
-            })
-        except Exception as e:
-            return Response({"message": str(e)}, status=500)
-
-
-class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
-    pagination_class = paginators.Paginator
-
-class CartViewSet(viewsets.ModelViewSet):
-    serializer_class = CartSerializer
-    pagination_class = paginators.Paginator
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return Cart.objects.filter(resident=self.request.user)
-
-    @action(methods=['post'], detail=False, url_path='add-product')
-    def add_product(self, request):
-        user = request.user
-        product_id = request.data.get('product_id')
-        quantity = int(request.data.get('quantity', 1))
-
-        try:
-            product = get_object_or_404(Product, id=product_id)
-        except Product.DoesNotExist:
-            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        cart, created = Cart.objects.get_or_create(resident=user)
-        cart_product, cart_product_created = CartProduct.objects.get_or_create(cart=cart, product=product)
-
-        if not cart_product_created:
-            cart_product.quantity += quantity
-        else:
-            cart_product.quantity = quantity
-
-        cart_product.save()
-        cart.refresh_from_db()
-        serialized_cart = CartSerializer(cart)
-
-        return Response({'status': 'Product added to cart', 'cart': serialized_cart.data}, status=status.HTTP_200_OK)
-
-    @action(methods=['get'], detail=False, url_path='cart-summary')
-    def cart_summary(self, request):
-        user = request.user
-        try:
-            cart = Cart.objects.get(resident=user)
-        except Cart.DoesNotExist:
-            return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        cart_products = CartProduct.objects.filter(cart=cart)
-        serialized_cart_products = CartProductSerializer(cart_products, many=True)
-
-        total_price = sum(item.product.price * item.quantity for item in cart_products)
-
-        return Response({'cart_products': serialized_cart_products.data, 'total_price': total_price}, status=status.HTTP_200_OK)
-
-@action(methods=['post'], detail=False, url_path='update-product-quantity')
-    def update_product_quantity(self, request):
-        user = request.user
-        product_id = request.data.get('product_id')
-        quantity = int(request.data.get('quantity', 1))
-
-        try:
-            product = get_object_or_404(Product, id=product_id)
-        except Product.DoesNotExist:
-            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            cart = Cart.objects.get(resident=user)
-            cart_product = CartProduct.objects.get(cart=cart, product=product)
-        except (Cart.DoesNotExist, CartProduct.DoesNotExist):
-            return Response({'error': 'Cart or CartProduct not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        if quantity <= 0:
-            cart_product.delete()
-        else:
-            cart_product.quantity = quantity
-            cart_product.save()
-
-        total_price = sum(item.product.price * item.quantity for item in CartProduct.objects.filter(cart=cart))
-
-        serialized_cart = CartSerializer(cart)
-
-        return Response({
-            'status': 'Product quantity updated',
-            'cart': serialized_cart.data,
-            'total_price': total_price
-        }, status=status.HTTP_200_OK)
-
 class FlatViewSet(viewsets.ModelViewSet):
     queryset = Flat.objects.all()
     serializer_class = FlatSerializer
@@ -417,26 +411,6 @@ class FlatViewSet(viewsets.ModelViewSet):
     def flat_count(self, request):
         flat_count = Flat.objects.all().count()  # Assuming is_staff indicates staff
         return Response({'flat_count': flat_count})
-
-
-class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.all()
-    serializer_class = OrderSerializer
-    permission_classes = [IsAuthenticated]
-
-    @action(detail=True, methods=['post'], url_path='confirm-order')
-        def confirm_order(self, request, pk=None):
-            user = request.user
-            try:
-                order = Order.objects.get(id=pk, resident=user, status='ĐANG CHỜ')
-                order.status = 'ĐANG GIAO'
-                order.save()
-                serializer = self.get_serializer(order)
-                return Response(serializer.data, status=status.HTTP_200_OK)
-            except Order.DoesNotExist:
-                return Response({'error': 'Order does not exist or you do not have permission to confirm it.'},
-                                status=status.HTTP_404_NOT_FOUND)
-
 
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all()
@@ -457,6 +431,17 @@ class ItemViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    @action(methods=['post'], detail=False, url_path='create-item')
+    def create_item(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            return Response({"error": "Only superusers can create item"}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
     @action(detail=True, methods=['patch'])
     def mark_received(self, request, pk=None):
         user = request.user
@@ -470,7 +455,6 @@ class ItemViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
-
 
 class FaMemberViewSet(viewsets.ModelViewSet):
     queryset = FaMember.objects.all()
@@ -501,6 +485,13 @@ class FeedbackViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def create(self, request):
+        serializer = FeedbackSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(resident=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['patch'])  # Change 'put' to 'patch'
     def mark_as_resolved(self, request, pk=None):
         if not request.user.is_superuser:
@@ -522,3 +513,148 @@ class FeedbackViewSet(viewsets.ModelViewSet):
         except Feedback.DoesNotExist:
             raise Http404("Feedback not found.")
 
+class SurveyViewSet(viewsets.ModelViewSet):
+    queryset = Survey.objects.all()
+    serializer_class = SurveySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        if not self.request.user.is_superuser:
+            raise permissions.PermissionDenied("Only superusers can create surveys.")
+
+        # Lưu khảo sát với creator là người dùng hiện tại
+        serializer.save(creator=self.request.user)
+
+    def list(self, request):
+        queryset = self.get_queryset()
+        serializer = self.serializer_class(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(methods=['post'], detail=False, url_path='create-survey')
+    def create_survey(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            return Response({"error": "Only superusers can create surveys."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+class SurveyResultViewSet(viewsets.ModelViewSet):
+    queryset = SurveyResult.objects.all()
+    serializer_class = SurveyResultSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return SurveyResult.objects.all()
+        elif user.is_staff:
+            return SurveyResult.objects.filter(id=user.id)
+        return SurveyResult.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(resident=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def list(self, request):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='survey-count')
+    def survey_count(self, request, *args, **kwargs):
+        resident = self.request.user
+        if resident.is_superuser:
+            survey = SurveyResult.objects.all()
+        else:
+            survey = SurveyResult.objects.filter(resident=resident)
+
+        survey_count = survey.count()
+
+        return Response({'survey_count': survey_count}, status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['delete'], url_path='delete-result')
+    def delete_result(self, request, pk=None):
+        try:
+            result = self.get_object()
+            result.delete()
+            return Response({"message": "Result deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
+        except Bill.DoesNotExist:
+            return Response({"error": "Result not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+
+class StatisticalViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        return Response({"message": "Please provide a survey_id to get cleanliness statistics."}, status=400)
+
+    def retrieve(self, request, pk=None):
+        try:
+            queryset = SurveyResult.objects.filter(survey_id=pk)
+            if not queryset.exists():
+                return Response({"message": "Survey with the specified ID does not exist."}, status=404)
+
+            stats = queryset.aggregate(
+                maximum_cleanliness=Max('cleanliness_rating'),
+                maximum_facilities=Max('facilities_rating'),
+                maximum_services=Max('services_rating')
+            )
+
+            return Response({
+                'maximum_cleanliness': stats['maximum_cleanliness'],
+                'maximum_facilities': stats['maximum_facilities'],
+                'maximum_services': stats['maximum_services']
+            })
+        except Exception as e:
+            return Response({"message": str(e)}, status=500)
+
+
+# @csrf_exempt
+# def create_bill_from_cart(request, cart_id):
+#     if request.method == 'POST':
+#         try:
+#             cart = Cart.objects.get(id=cart_id)
+#             resident = cart.resident
+#             cart_products = cart.cartproduct_set.all()
+#             total_amount = sum(item.product.price * item.quantity for item in cart_products)
+#
+#             # Create a new bill
+#             bill = Bill.objects.create(
+#                 resident=resident,
+#                 amount=total_amount,
+#                 issue_date=date.today(),
+#                 due_date=date(2024, 8, 31),
+#                 bill_type="HÓA ĐƠN MUA HÀNG",
+#                 payment_status="UNPAID"
+#             )
+#
+#             # Add products to the bill with pending status
+#             for item in cart_products:
+#                 BillProduct.objects.create(
+#                     bill=bill,
+#                     product=item.product,
+#                     quantity=item.quantity,
+#                     price=item.product.price,
+#                 )
+#
+#             # Clear the cart
+#             cart.cartproduct_set.all().delete()
+#
+#             return JsonResponse({'id': bill.id, 'amount': bill.amount}, status=200)
+#
+#         except Cart.DoesNotExist:
+#             return JsonResponse({'error': 'Cart does not exist'}, status=404)
+#     else:
+#         return JsonResponse({'error': 'Method not allowed'}, status=405)

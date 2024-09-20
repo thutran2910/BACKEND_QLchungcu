@@ -6,7 +6,6 @@ from .models import Resident, Flat, Bill, Item, Feedback, Survey, FaMember, Surv
     CartProduct, OrderProduct, Order
 
 
-
 class ResidentSerializer(serializers.ModelSerializer):
     avatar_url = serializers.SerializerMethodField()
     avatar = serializers.ImageField(write_only=True, required=False)
@@ -44,53 +43,6 @@ class ResidentSerializer(serializers.ModelSerializer):
             'password': {'write_only': True},
             'is_active': {'read_only': True}
         }
-
-
-class BillSerializer(serializers.ModelSerializer):
-    first_name = serializers.CharField(source='resident.first_name', read_only=True)
-    last_name = serializers.CharField(source='resident.last_name', read_only=True)
-    phone = serializers.CharField(source='resident.phone', read_only=True)
-    resident_id = serializers.PrimaryKeyRelatedField(queryset=Resident.objects.all(), write_only=True, source='resident')
-    image_url = serializers.SerializerMethodField()
-    image = serializers.ImageField(write_only=True, required=False)
-    avatar_url = serializers.SerializerMethodField()
-
-    def get_image_url(self, instance):
-        if instance.image:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(instance.image.url)
-            return instance.image.url
-        return None
-    def get_avatar_url(self, instance):
-        if instance.resident.avatar:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(instance.resident.avatar.url)
-            return instance.resident.avatar.url
-        return None
-
-    def to_representation(self, instance):
-        rep = super().to_representation(instance)
-        rep['image_url'] = self.get_image_url(instance)
-        rep['avatar_url'] = self.get_avatar_url(instance)
-        return rep
-    class Meta:
-        model = Bill
-        fields = '__all__'
-
-
-
-class SurveySerializer(ModelSerializer):
-    class Meta:
-        model = Survey
-        fields = '__all__'
-
-class SurveyResultSerializer(ModelSerializer):
-    class Meta:
-        model = SurveyResult
-        fields = '__all__'
-
 class ProductSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     image = serializers.ImageField(write_only=True, required=False)
@@ -132,6 +84,16 @@ class OrderProductSerializer(serializers.ModelSerializer):
         model = OrderProduct
         fields = ['id', 'product', 'product_id', 'quantity', 'price']
 
+class OrderSerializer(serializers.ModelSerializer):
+    order_products = OrderProductSerializer(many=True, read_only=True)
+    first_name = serializers.CharField(source='resident.first_name')
+    last_name = serializers.CharField(source='resident.last_name')
+    email = serializers.CharField(source='resident.email')
+    phone = serializers.CharField(source='resident.phone')
+    class Meta:
+        model = Order
+        fields = ['id', 'resident','first_name' ,'last_name','email','phone','total_amount', 'order_date', 'status', 'order_products']
+
 
 class FlatSerializer(ModelSerializer):
     class Meta:
@@ -146,6 +108,40 @@ class ItemSerializer(ModelSerializer):
         model = Item
         fields = '__all__'
 
+class BillSerializer(serializers.ModelSerializer):
+    first_name = serializers.CharField(source='resident.first_name', read_only=True)
+    last_name = serializers.CharField(source='resident.last_name', read_only=True)
+    phone = serializers.CharField(source='resident.phone', read_only=True)
+    #resident_id = serializers.PrimaryKeyRelatedField(queryset=Resident.objects.all(), write_only=True, source='resident')
+    image_url = serializers.SerializerMethodField()
+    image = serializers.ImageField(write_only=True, required=False)
+    avatar_url = serializers.SerializerMethodField()
+
+    def get_image_url(self, instance):
+        if instance.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(instance.image.url)
+            return instance.image.url
+        return None
+    def get_avatar_url(self, instance):
+        if instance.resident.avatar:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(instance.resident.avatar.url)
+            return instance.resident.avatar.url
+        return None
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['image_url'] = self.get_image_url(instance)
+        rep['avatar_url'] = self.get_avatar_url(instance)
+        return rep
+    class Meta:
+        model = Bill
+        fields = '__all__'
+
+
 class FaMemberSerializer(ModelSerializer):
     first_name = serializers.CharField(source='resident.first_name', read_only=True)
     last_name = serializers.CharField(source='resident.last_name', read_only=True)
@@ -159,4 +155,17 @@ class FeedbackSerializer(ModelSerializer):
 
     class Meta:
         model = Feedback
+        fields = '__all__'
+
+class SurveySerializer(ModelSerializer):
+    class Meta:
+        model = Survey
+        fields = '__all__'
+        read_only_fields = ['creator', 'created_at']
+
+class SurveyResultSerializer(ModelSerializer):
+    first_name = serializers.CharField(source='resident.first_name', read_only=True)
+    last_name = serializers.CharField(source='resident.last_name', read_only=True)
+    class Meta:
+        model = SurveyResult
         fields = '__all__'
